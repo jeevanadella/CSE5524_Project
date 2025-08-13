@@ -74,7 +74,7 @@ uv run python baselines/training/evaluation.py
 ```
 
 ## References
-Baselines built of of BioCLIPv2 and Dinov2:
+Baselines built off of BioCLIPv2 and Dinov2:
 
 Gu, Jianyang, et al. "Bioclip 2: Emergent properties from scaling hierarchical contrastive learning." arXiv preprint arXiv:2505.23883 (2025).
 
