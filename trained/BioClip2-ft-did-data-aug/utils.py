@@ -148,7 +148,7 @@ def get_bioclip():
 
     model: bioclip
     """
-    # bioclip = create_model("hf-hub:imageomics/bioclip-2", output_dict=True, require_pretrained=True).cuda()
+
     bioclip, _, preprocess = create_model_and_transforms(
         "hf-hub:imageomics/bioclip-2", output_dict=True, require_pretrained=True
     )
@@ -168,28 +168,23 @@ def get_DINO(device):
 
 def get_training_args():
     parser = ArgumentParser()
-    parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--lr", type=float, default=0.003)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--hf_token", type=str, default=None)
-    parser.add_argument("--n_last_trainable_blocks", type=int, default=6)
+    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--n_last_trainable_blocks", type=int, default=2)
+
     parser.add_argument("--domain_id_aug_prob", type=float, default=0.35)
+    parser.add_argument("--feature_noise_std", type=float, default=0.02)
+    parser.add_argument("--specimen_dropout_prob", type=float, default=0.25)
+    parser.add_argument("--feature_mixup_alpha", type=float, default=0.2)
+
+    parser.add_argument("--aug_warmup_pct", type=float, default=0.25)  
+    parser.add_argument("--progressive_aug", action="store_true", default=True)  
+    parser.add_argument("--no_progressive_aug", action="store_false", dest="progressive_aug") 
     
-    # Progressive augmentation parameters
-    parser.add_argument("--feature_noise_std", type=float, default=0.02, 
-                       help="Standard deviation of Gaussian noise added to features")
-    parser.add_argument("--specimen_dropout_prob", type=float, default=0.25,
-                       help="Probability of dropping each specimen during training")
-    parser.add_argument("--feature_mixup_alpha", type=float, default=0.2,
-                       help="Alpha parameter for feature mixup (0 = disabled)")
-    parser.add_argument("--progressive_aug", action="store_true", default=True,
-                       help="Use progressive augmentation (ramp up over training)")
-    parser.add_argument("--no_progressive_aug", action="store_false", dest="progressive_aug",
-                       help="Disable progressive augmentation")
-    parser.add_argument("--aug_warmup_pct", type=float, default=0.25,
-                       help="Percentage of epochs for augmentation warmup (0.25 = first 25%)")
-    
+    parser.add_argument("--hf_token", type=str, default=None)
+
     return parser.parse_args()
 
 

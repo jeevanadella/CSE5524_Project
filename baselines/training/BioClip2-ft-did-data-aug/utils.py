@@ -172,7 +172,7 @@ def get_training_args():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--n_last_trainable_blocks", type=int, default=2)
+    parser.add_argument("--n_last_trainable_blocks", type=int, default=6)
     parser.add_argument("--domain_id_aug_prob", type=float, default=0.2)
     parser.add_argument("--hf_token", type=str, default=None)
 

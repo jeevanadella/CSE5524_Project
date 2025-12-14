@@ -19,23 +19,73 @@ from utils import (
 from model import BioClip2_DeepFeatureRegressorWithDomainID
 
 
-def train(model, dataloader, val_dataloader, lr, epochs, domain_id_aug_prob, save_dir):
+def train(model, dataloader, val_dataloader, lr, epochs, domain_id_aug_prob, feature_noise_std, 
+          specimen_dropout_prob, feature_mixup_alpha, progressive_aug, aug_warmup_pct, save_dir):
     optimizer = optim.Adam(model.get_trainable_parameters(lr=lr))
     loss_fn = nn.MSELoss()
     best_r2 = -1.0
     best_epoch = 0
     save_path = Path(save_dir, "model.pth")
+    
+
+    warmup_epochs = int(epochs * aug_warmup_pct)
+    
+    print("=" * 60)
+    print("Training Configuration")
+    print("=" * 60)
+    print(f"Progressive Augmentation: {'ENABLED' if progressive_aug else 'DISABLED'}")
+    if progressive_aug:
+        print(f"Warmup Schedule: Linear ramp over first {warmup_epochs} epochs ({aug_warmup_pct*100:.0f}% of training)")
+    print(f"Max augmentation settings:")
+    print(f"  - Domain ID dropout: {domain_id_aug_prob:.2f}")
+    print(f"  - Feature noise std: {feature_noise_std:.3f}")
+    print(f"  - Specimen dropout: {specimen_dropout_prob:.2f}")
+    print(f"  - Mixup alpha: {feature_mixup_alpha:.2f}")
+    print("=" * 60)
     print("begin training")
+    
     tbar = tqdm(range(epochs), position=0, leave=True)
     for epoch in tbar:
+
+        if progressive_aug and epoch < warmup_epochs:
+            aug_strength = epoch / warmup_epochs
+        else:
+            aug_strength = 1.0
+        
+        current_domain_aug_prob = aug_strength * domain_id_aug_prob
+        current_noise_std = aug_strength * feature_noise_std
+        current_dropout_prob = aug_strength * specimen_dropout_prob
+        current_mixup_alpha = aug_strength * feature_mixup_alpha
+        
         model.train()
         epoch_loss = 0
         inner_tbar = tqdm(dataloader, "training model", position=1, leave=False)
         preds = []
         gts = []
         for feats, y, did in inner_tbar:
-            if torch.rand(1).item() < domain_id_aug_prob:
+            batch_size = feats.size(0)
+            
+            if current_dropout_prob > 0 and batch_size > 1:
+                keep_mask = torch.rand(batch_size) > current_dropout_prob
+                if keep_mask.sum() == 0:
+                    keep_mask[0] = True
+                feats = feats[keep_mask]
+                y = y[keep_mask]
+                did = [did[i] for i, keep in enumerate(keep_mask) if keep]
+            
+            if current_mixup_alpha > 0 and feats.size(0) > 1:
+                lam = np.random.beta(current_mixup_alpha, current_mixup_alpha)
+                indices = torch.randperm(feats.size(0))
+                feats = lam * feats + (1 - lam) * feats[indices]
+                y = lam * y + (1 - lam) * y[indices]
+            
+            if torch.rand(1).item() < current_domain_aug_prob:
                 did = [model.padding_idx for _ in range(len(did))]
+            
+            if current_noise_std > 0:
+                noise = torch.randn_like(feats) * current_noise_std
+                feats = feats + noise
+            
             y = y.cuda()
             optimizer.zero_grad()
             outputs = model.forward_unfrozen(feats.cuda(), domain_ids=did)
@@ -58,6 +108,10 @@ def train(model, dataloader, val_dataloader, lr, epochs, domain_id_aug_prob, sav
             "train_SPEI_1y_r2": spei_1y_r2,
             "train_SPEI_2y_r2": spei_2y_r2,
         }
+        
+        if progressive_aug:
+            log_dict["aug_strength"] = aug_strength
+        
         tbar.set_postfix(log_dict)
 
         epoch_loss = 0
@@ -162,6 +216,11 @@ def main():
         lr=args.lr,
         epochs=args.epochs,
         domain_id_aug_prob=args.domain_id_aug_prob,
+        feature_noise_std=args.feature_noise_std,
+        specimen_dropout_prob=args.specimen_dropout_prob,
+        feature_mixup_alpha=args.feature_mixup_alpha,
+        progressive_aug=args.progressive_aug,
+        aug_warmup_pct=args.aug_warmup_pct,
         save_dir=save_dir
     )
 
