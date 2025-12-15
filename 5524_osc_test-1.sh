@@ -13,4 +13,4 @@ source $(conda info --base)/etc/profile.d/conda.sh
 
 conda activate cv_env
 
-python trained/training/BioClip2-ft-did/train.py
+python trained/BioClip2-ft-did/train.py

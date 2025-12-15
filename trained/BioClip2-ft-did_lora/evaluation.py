@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import torch
@@ -9,13 +10,13 @@ from datasets import load_dataset
 
 from utils import (
     get_training_args,
-    get_DINO,
+    get_bioclip,
     evalute_spei_r2_scores,
     save_results,
     compile_event_predictions,
     get_collate_fn,
 )
-from model import DINO_DeepRegressor
+from model import BioClip2_DeepFeatureRegressorWithDomainID
 
 
 def evaluate(model, dataloader):
@@ -25,11 +26,11 @@ def evaluate(model, dataloader):
         all_preds = []
         all_gts = []
         all_events = []
-        for imgs, targets, eventIDs in tbar:
+        for imgs, targets, eventIDs, did in tbar:
             imgs = imgs.cuda()
             targets = targets.cuda()
 
-            outputs = model(imgs)
+            outputs = model(imgs, domain_ids=did)
             abs_error += torch.mean(torch.abs(outputs - targets), dim=0)
 
             all_preds.extend(outputs.detach().cpu().numpy())
@@ -68,7 +69,7 @@ def test_and_save(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        collate_fn=get_collate_fn(["eventID"]),
+        collate_fn=get_collate_fn(["eventID", "domainID"]),
     )
 
     mae_scores, r2_scores = evaluate(dataloader=dataloader, model=model)
@@ -81,8 +82,12 @@ def main():
     save_dir = Path(__file__).resolve().parent
     
     # load model
-    bioclip, processor = get_DINO()
-    model = DINO_DeepRegressor(bioclip).cuda()
+    # Load known ids
+    with open(save_dir / "known_domain_ids.json", "r") as f:
+        known_domain_ids = json.load(f)
+    
+    bioclip, transforms = get_bioclip()
+    model = BioClip2_DeepFeatureRegressorWithDomainID(bioclip, n_last_trainable_resblocks=args.n_last_trainable_blocks, known_domain_ids=known_domain_ids).cuda()
     model.load_state_dict(torch.load(save_dir / "model.pth"))
     
     # Get datasets
@@ -94,7 +99,7 @@ def main():
     
     # Transform images for model input
     def dset_transforms(examples):
-        examples["pixel_values"] = [processor(img.convert("RGB"), return_tensors="pt")['pixel_values'][0] for img in examples["file_path"]]
+        examples["pixel_values"] = [transforms(img.convert("RGB")) for img in examples["file_path"]]
         return examples
     
     test_dset = ds.with_transform(dset_transforms)
@@ -105,7 +110,7 @@ def main():
         save_dir / "results.json",
         args.batch_size,
         args.num_workers,
-        model
+        model,
     )
 
 
