@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import torch
@@ -10,16 +11,21 @@ from datasets import load_dataset
 
 from utils import (
     get_training_args,
-    get_DINO,
-    extract_dino_features,
+    get_bioclip,
     evalute_spei_r2_scores,
+    extract_deep_features_with_domain_id,
     get_collate_fn,
 )
-from model import DINO_DeepRegressor
+from model import BioClip2_DeepFeatureRegressorWithDomainID
 
 
-def train(model, dataloader, val_dataloader, lr, epochs, save_dir):
-    optimizer = optim.Adam(model.regressor.parameters(), lr)
+def train(model, dataloader, val_dataloader, lr, epochs, domain_id_aug_prob, save_dir):
+    optimizer = optim.AdamW(model.get_trainable_parameters(lr=lr), weight_decay=0.01, betas=(0.9, 0.999))
+    
+    # Cosine annealing with warmup
+    warmup_epochs = min(10, epochs // 10)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs - warmup_epochs, eta_min=lr * 0.01)
+    
     loss_fn = nn.MSELoss()
     best_r2 = -1.0
     best_epoch = 0
@@ -32,11 +38,12 @@ def train(model, dataloader, val_dataloader, lr, epochs, save_dir):
         inner_tbar = tqdm(dataloader, "training model", position=1, leave=False)
         preds = []
         gts = []
-        for feats, y in inner_tbar:
+        for feats, y, did in inner_tbar:
+            if torch.rand(1).item() < domain_id_aug_prob:
+                did = [model.padding_idx for _ in range(len(did))]
             y = y.cuda()
             optimizer.zero_grad()
-            flatten_feats = model.tokens_to_linear(feats.cuda()).squeeze()
-            outputs = model.regressor(flatten_feats)
+            outputs = model.forward_unfrozen(feats.cuda(), domain_ids=did)
             loss = loss_fn(y, outputs)
             loss.backward()
             optimizer.step()
@@ -64,10 +71,9 @@ def train(model, dataloader, val_dataloader, lr, epochs, save_dir):
         gts = []
         model.eval()
         with torch.no_grad():
-            for feats, y in inner_tbar:
+            for feats, y, did in inner_tbar:
                 y = y.cuda()
-                flatten_feats = model.tokens_to_linear(feats.cuda()).squeeze()
-                outputs = model.regressor(flatten_feats)
+                outputs = model.forward_unfrozen(feats.cuda(), domain_ids=did)
                 loss = loss_fn(y, outputs)
 
                 epoch_loss = epoch_loss + loss
@@ -92,9 +98,14 @@ def train(model, dataloader, val_dataloader, lr, epochs, save_dir):
             
             torch.save(model.state_dict(), save_path)
         
+        # Step scheduler after warmup
+        if epoch >= warmup_epochs:
+            scheduler.step()
+        
         log_dict |= {
             "best_epoch": best_epoch,
             "best_val_r2": best_r2,
+            "lr": optimizer.param_groups[0]["lr"],
         }
         tbar.set_postfix(log_dict)
 
@@ -111,14 +122,18 @@ def main():
         token=args.hf_token,
     )
     
-    # load dino and model
+    known_domain_ids = list(set([x for x in ds["train"]["domainID"]]))
+    save_dir = Path(__file__).resolve().parent
+    with open(save_dir / "known_domain_ids.json", "w") as f:
+        json.dump(known_domain_ids, f)
     
-    dino, processor = get_DINO()
-    model = DINO_DeepRegressor(dino).cuda()
+    # load bioclip and model
+    bioclip, transforms = get_bioclip()
+    model = BioClip2_DeepFeatureRegressorWithDomainID(bioclip, n_last_trainable_resblocks=args.n_last_trainable_blocks, known_domain_ids=known_domain_ids, use_lora=True).cuda()
     
     # Transform images for model input
     def dset_transforms(examples):
-        examples["pixel_values"] = [processor(img.convert("RGB"), return_tensors="pt")['pixel_values'][0] for img in examples["file_path"]]
+        examples["pixel_values"] = [transforms(img.convert("RGB")) for img in examples["file_path"]]
         return examples
     
     train_dset = ds["train"].with_transform(dset_transforms)
@@ -132,15 +147,15 @@ def main():
             batch_size=args.batch_size,
             shuffle=i == 0, # Shuffle only for training set
             num_workers=args.num_workers,
-            collate_fn=get_collate_fn(),
+            collate_fn=get_collate_fn(["domainID"]),
         )
 
 
         # Extract features
-        X, Y = extract_dino_features(dataloader, dino)
+        X, Y, DID = extract_deep_features_with_domain_id(dataloader, model)
 
         dataloader = DataLoader(
-            dataset=torch.utils.data.TensorDataset(X, Y),
+            dataset=torch.utils.data.TensorDataset(X, Y, DID),
             batch_size=args.batch_size,
             shuffle=i == 0, # Shuffle only for training set
             num_workers=args.num_workers,
@@ -150,15 +165,17 @@ def main():
     train_dataloader, val_dataloader = dataloaders
 
     # run model
-    save_dir = Path(__file__).resolve().parent
     train(
         model=model,
         dataloader=train_dataloader,
         val_dataloader=val_dataloader,
         lr=args.lr,
         epochs=args.epochs,
+        domain_id_aug_prob=args.domain_id_aug_prob,
         save_dir=save_dir
     )
+
+
 
 if __name__ == "__main__":
     main()

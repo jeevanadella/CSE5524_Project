@@ -78,13 +78,12 @@ def extract_deep_features_with_domain_id(dataloader, model):
         for x, y, did in tqdm(dataloader, desc="Extracting Features"):
             X.append(model.forward_frozen(x.cuda()).detach().cpu())
             Y.append(y)
-            DID.append(did)
+            DID.extend(did)
 
     X = torch.cat(X)
     Y = torch.cat(Y)
-    DID = torch.cat(DID)
 
-    return X, Y, DID
+    return X, Y, torch.tensor(DID)
 
 
 def extract_bioclip_features(dataloader, bioclip, eventID=False):
@@ -173,7 +172,7 @@ def get_training_args():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--n_last_trainable_blocks", type=int, default=2)
+    parser.add_argument("--n_last_trainable_blocks", type=int, default=6)
     parser.add_argument("--domain_id_aug_prob", type=float, default=0.2)
     parser.add_argument("--hf_token", type=str, default=None)
 

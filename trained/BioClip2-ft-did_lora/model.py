@@ -1,28 +1,7 @@
-'''
-Sample predictive model.
-The ingestion program will call `predict` to get a prediction for each test image and then save the predictions for scoring. The following two methods are required:
-- predict: uses the model to perform predictions.
-- load: reloads the model.
-'''
-import os
-import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from open_clip import create_model_and_transforms
-
-def get_bioclip():
-    """function that returns frozen bioclip model
-
-    model: bioclip
-    """
-    # bioclip = create_model("hf-hub:imageomics/bioclip-2", output_dict=True, require_pretrained=True).cuda()
-    bioclip, _, preprocess = create_model_and_transforms(
-        "hf-hub:imageomics/bioclip-2", output_dict=True, require_pretrained=True
-    )
-    bioclip = bioclip.cuda()
-    return bioclip, preprocess
-
+from peft import LoraConfig, get_peft_model
 
 
 class BioClip2_DeepFeatureRegressorWithDomainID(nn.Module):
@@ -33,14 +12,35 @@ class BioClip2_DeepFeatureRegressorWithDomainID(nn.Module):
         hidden_size_begin=512,
         hidden_layer_decrease_factor=4,
         num_outputs=3,
-        n_last_trainable_resblocks=2,
+        n_last_trainable_resblocks=6,
         known_domain_ids=None,
+        use_lora=True,
     ):
         super().__init__()
         # regressor linear layer
         self.n_last_trainable_resblocks = n_last_trainable_resblocks
         self.bioclip = bioclip
         self.known_domain_ids = known_domain_ids
+        self.use_lora = use_lora
+        
+        # Apply LoRA to the last n_last_trainable_resblocks
+        if self.use_lora:
+            peft_config = LoraConfig(
+                r=256,
+                lora_alpha=256,
+                target_modules=["c_fc", "c_proj", "out_proj", "q_proj", "k_proj", "v_proj"],
+                lora_dropout=0.0,
+                bias="none",
+                task_type=None,
+                use_rslora=True,
+                use_dora=True,
+            )
+
+            resblocks = self.bioclip.visual.transformer.resblocks
+            start = len(resblocks) - self.n_last_trainable_resblocks
+            for idx in range(start, len(resblocks)):
+                resblocks[idx] = get_peft_model(resblocks[idx], peft_config)
+        
         if known_domain_ids:
             self.padding_idx = len(known_domain_ids)
             self.domain_id_feature_extractor = nn.Sequential(
@@ -79,20 +79,42 @@ class BioClip2_DeepFeatureRegressorWithDomainID(nn.Module):
         )
 
     def get_trainable_parameters(self, lr=0.003):
-        feature_params = []
-        for block in self.bioclip.visual.transformer.resblocks[
-            -self.n_last_trainable_resblocks :
-        ]:
-            feature_params += list(block.parameters())
-
-        feature_params += self.bioclip.visual.ln_post.parameters()
-        return [
-            {
-                "params": feature_params,
-                "lr": lr * 0.01,
-            },
-            {"params": list(self.regressor.parameters()), "lr": lr},
-        ]
+        param_groups = []
+        
+        # Layer-wise learning rate decay for LoRA parameters
+        resblocks = self.bioclip.visual.transformer.resblocks
+        start_idx = len(resblocks) - self.n_last_trainable_resblocks
+        
+        for idx, block in enumerate(resblocks[-self.n_last_trainable_resblocks:]):
+            layer_params = []
+            if self.use_lora:
+                for name, param in block.named_parameters():
+                    if "lora" in name or "magnitude_vector" in name:
+                        layer_params.append(param)
+            else:
+                layer_params = list(block.parameters())
+            
+            if layer_params:
+                # Deeper layers (later in list) get higher LR
+                layer_lr_multiplier = 1.0 + (idx / self.n_last_trainable_resblocks) * 0.5
+                param_groups.append({
+                    "params": layer_params,
+                    "lr": lr * layer_lr_multiplier,
+                })
+        
+        # LayerNorm gets moderate LR
+        param_groups.append({
+            "params": list(self.bioclip.visual.ln_post.parameters()),
+            "lr": lr * 0.5,
+        })
+        
+        # Regressor gets full LR  
+        param_groups.append({
+            "params": list(self.regressor.parameters()),
+            "lr": lr * 1.5,
+        })
+        
+        return param_groups
 
     def forward(self, x, domain_ids=None):
         h = self.forward_frozen(x)
@@ -158,52 +180,3 @@ class BioClip2_DeepFeatureRegressorWithDomainID(nn.Module):
             domain_id_features = self.domain_id_feature_extractor(domain_ids)
 
         return self.regressor(features + domain_id_features)
-
-
-class Model:
-    def __init__(self):
-        # model will be called from the load() method
-        self.model = None
-        self.transforms = None
-
-    def load(self):
-        bioclip, transforms = get_bioclip()
-        self.transforms = transforms
-        model_path = os.path.join(os.path.dirname(__file__), "model.pth")
-        known_domain_ids = json.load(open(os.path.join(os.path.dirname(__file__), "known_domain_ids.json")))
-        self.model = BioClip2_DeepFeatureRegressorWithDomainID(bioclip=bioclip, n_last_trainable_resblocks=2, known_domain_ids=known_domain_ids).cuda()
-        self.model.load_state_dict(torch.load(model_path))
-            
-
-    def predict(self, datapoints):
-        images = [entry['relative_img'] for entry in datapoints]
-        tensor_images = torch.stack([self.transforms(image) for image in images])
-        domain_ids = torch.tensor([entry['domainID'] for entry in datapoints])
-        #model outputs 30d,1y,2y
-        outputs = []
-        dset = torch.utils.data.TensorDataset(tensor_images, domain_ids)
-        loader = torch.utils.data.DataLoader(dset, batch_size=4, shuffle=False)
-        for batch in loader:
-            x = batch[0]
-            dids = batch[1]
-            outputs.append(self.model(x.cuda(), domain_ids=dids).detach().cpu())
-        outputs = torch.cat(outputs)
-        mu = torch.mean(outputs, dim=0)
-        sigma = torch.std(outputs,dim=0)
-        return {
-        'SPEI_30d': {
-            'mu': mu[0].item(),
-            'sigma': sigma[0].item()
-        },
-        'SPEI_1y': {
-            'mu': mu[1].item(),
-            'sigma': sigma[1].item()
-        },
-        'SPEI_2y': {
-            'mu': mu[2].item(),
-            'sigma': sigma[2].item()
-        }
-}   
-    
-        
-        
