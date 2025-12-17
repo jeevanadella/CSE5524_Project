@@ -1,6 +1,28 @@
+'''
+Sample predictive model.
+The ingestion program will call `predict` to get a prediction for each test image and then save the predictions for scoring. The following two methods are required:
+- predict: uses the model to perform predictions.
+- load: reloads the model.
+'''
+import os
+import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from open_clip import create_model_and_transforms
+
+def get_bioclip():
+    """function that returns frozen bioclip model
+
+    model: bioclip
+    """
+    # bioclip = create_model("hf-hub:imageomics/bioclip-2", output_dict=True, require_pretrained=True).cuda()
+    bioclip, _, preprocess = create_model_and_transforms(
+        "hf-hub:imageomics/bioclip-2", output_dict=True, require_pretrained=True
+    )
+    bioclip = bioclip.cuda()
+    return bioclip, preprocess
+
 
 
 class BioClip2_DeepFeatureRegressorWithDomainID(nn.Module):
@@ -136,3 +158,52 @@ class BioClip2_DeepFeatureRegressorWithDomainID(nn.Module):
             domain_id_features = self.domain_id_feature_extractor(domain_ids)
 
         return self.regressor(features + domain_id_features)
+
+
+class Model:
+    def __init__(self):
+        # model will be called from the load() method
+        self.model = None
+        self.transforms = None
+
+    def load(self):
+        bioclip, transforms = get_bioclip()
+        self.transforms = transforms
+        model_path = os.path.join(os.path.dirname(__file__), "model.pth")
+        known_domain_ids = json.load(open(os.path.join(os.path.dirname(__file__), "known_domain_ids.json")))
+        self.model = BioClip2_DeepFeatureRegressorWithDomainID(bioclip=bioclip, n_last_trainable_resblocks=2, known_domain_ids=known_domain_ids).cuda()
+        self.model.load_state_dict(torch.load(model_path))
+            
+
+    def predict(self, datapoints):
+        images = [entry['relative_img'] for entry in datapoints]
+        tensor_images = torch.stack([self.transforms(image) for image in images])
+        domain_ids = torch.tensor([entry['domainID'] for entry in datapoints])
+        #model outputs 30d,1y,2y
+        outputs = []
+        dset = torch.utils.data.TensorDataset(tensor_images, domain_ids)
+        loader = torch.utils.data.DataLoader(dset, batch_size=4, shuffle=False)
+        for batch in loader:
+            x = batch[0]
+            dids = batch[1]
+            outputs.append(self.model(x.cuda(), domain_ids=dids).detach().cpu())
+        outputs = torch.cat(outputs)
+        mu = torch.mean(outputs, dim=0)
+        sigma = torch.std(outputs,dim=0)
+        return {
+        'SPEI_30d': {
+            'mu': mu[0].item(),
+            'sigma': sigma[0].item()
+        },
+        'SPEI_1y': {
+            'mu': mu[1].item(),
+            'sigma': sigma[1].item()
+        },
+        'SPEI_2y': {
+            'mu': mu[2].item(),
+            'sigma': sigma[2].item()
+        }
+}   
+    
+        
+        
