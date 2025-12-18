@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --account=PAS3162
-#SBATCH --job-name=bioclip-ft-did_train
+#SBATCH --job-name=bioclip-ft-did_train-data-aug
 #SBATCH --time=48:00:00
 #SBATCH --cluster=pitzer
 #SBATCH --nodes=2
