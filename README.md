@@ -211,6 +211,7 @@ sbatch bioclip2-ft-did_lora_eval.sh
 ```
 
 To run the python for each one run: 
+
 python trained/BioClip2-ft-did-data-aug/evaluation.py
 
 python trained/BioClip2-ft-did-combined/evaluation.py
