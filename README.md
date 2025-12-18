@@ -13,6 +13,7 @@ pip install peft
 
 Notes:
 - The project’s base Python dependencies are listed in `requirements.txt`; if needed, you can install them with `pip install -r requirements.txt` after activating the Conda environment.
+- for Downloading this project ensure that trained models are downloaded correctly since LFS was used. 
 
 ## 2) Advanced Algorithm (LoRA on BioCLIP2-ft-did)
 
@@ -203,10 +204,10 @@ In the trained directory, there are three sub-directories each with a trained mo
 
 To run the python scripts for testing for each one run: 
 
-python trained/BioClip2-ft-did-data-aug/evaluation.py
+python trained/BioClip2-ft-did_data_aug/evaluation.py
 
-python trained/BioClip2-ft-did-combined/evaluation.py
+python trained/BioClip2-ft-did_combined/evaluation.py
 
-python trained/BioClip2-ft-did-lora/evaluation.py
+python trained/BioClip2-ft-did_lora/evaluation.py
 
 The files expect CUDA. This computes losses and R² metrics for the three targets (SPEI_30d, SPEI_1y, SPEI_2y) and writes results alongside the trained model artifacts
