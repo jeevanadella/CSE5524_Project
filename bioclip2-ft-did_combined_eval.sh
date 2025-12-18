@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --account=PAS3162
-#SBATCH --job-name=bioclip2-ft-did_lora
+#SBATCH --job-name=bioclip-ft-did_train-data-aug
 #SBATCH --time=48:00:00
 #SBATCH --cluster=pitzer
 #SBATCH --nodes=2
@@ -30,6 +30,4 @@ pip install peft
 echo "Starting training on $(hostname)..."
 echo "GPU Available: $(python -c 'import torch; print(torch.cuda.is_available())')"
 
-python baselines/training/BioClip2-ft-did/train.py
-
-python baselines/training/BioClip2-ft-did/evaluation.py
+python trained/BioClip2-ft-did_combined/evaluation.py

@@ -30,6 +30,4 @@ pip install peft
 echo "Starting training on $(hostname)..."
 echo "GPU Available: $(python -c 'import torch; print(torch.cuda.is_available())')"
 
-python baselines/training/BioClip2-ft-did/train.py
-
-python baselines/training/BioClip2-ft-did/evaluation.py
+python trained/BioClip2-ft-did_lora/evaluation.py
