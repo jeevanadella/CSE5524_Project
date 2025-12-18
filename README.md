@@ -200,17 +200,8 @@ The training `.sh` scripts include an additional evaluation step that runs after
 
 In the trained directory, there are three sub-directories each with a trained models of the data augmented, LoRA, and combined altered BioClip2 models.
 
-To test these models using SLURM scripts you can submit via the `sbatch` on your cluster. You may have to alter the conda envronment listed in the shell files if it does not match 'cse5524_env':
 
-Submit any of them like this: 
-
-```bash
-sbatch bioclip2-ft-did-data-aug_eval.sh
-sbatch bioclip2-ft-did_combined_eval.sh
-sbatch bioclip2-ft-did_lora_eval.sh
-```
-
-To run the python for each one run: 
+To run the python scripts for testing for each one run: 
 
 python trained/BioClip2-ft-did-data-aug/evaluation.py
 
